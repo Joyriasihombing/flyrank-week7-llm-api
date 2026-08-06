@@ -1,5 +1,5 @@
 from sqlalchemy import Boolean, Column, ForeignKey, Integer, String
-
+from sqlalchemy.orm import relationship
 from app.database import Base
 
 
@@ -10,7 +10,7 @@ class Widget(Base):
 
     user_id = Column(Integer, ForeignKey("users.id"))
 
-    title = Column(String)
+    title = Column(String, nullable=False)
 
     description = Column(String)
 
@@ -19,3 +19,5 @@ class Widget(Base):
     button_text = Column(String)
 
     is_active = Column(Boolean, default=True)
+
+    owner = relationship("User")

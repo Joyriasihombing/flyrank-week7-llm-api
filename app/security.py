@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 
 from jose import jwt
 from passlib.context import CryptContext
+from jose import JWTError, jwt
 
 SECRET_KEY = "CHANGE_THIS_SECRET"
 ALGORITHM = "HS256"
@@ -17,16 +18,14 @@ def hash_password(password: str):
     return pwd_context.hash(password)
 
 
-def verify_password(password, hashed):
-    return pwd_context.verify(password, hashed)
+def verify_password(password: str, hashed_password: str):
+    return pwd_context.verify(password, hashed_password)
 
 
 def create_access_token(data: dict):
     payload = data.copy()
-
-    payload["exp"] = (
-        datetime.utcnow()
-        + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    payload["exp"] = datetime.utcnow() + timedelta(
+        minutes=ACCESS_TOKEN_EXPIRE_MINUTES
     )
 
     return jwt.encode(
@@ -34,3 +33,14 @@ def create_access_token(data: dict):
         SECRET_KEY,
         algorithm=ALGORITHM
     )
+
+def verify_token(token: str):
+    try:
+        payload = jwt.decode(
+            token,
+            SECRET_KEY,
+            algorithms=[ALGORITHM]
+        )
+        return payload
+    except JWTError:
+        return None
