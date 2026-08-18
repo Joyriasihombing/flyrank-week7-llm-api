@@ -1,873 +1,386 @@
-# FlyRank Widget Platform API
+Berikut adalah versi **`README.md`** yang sudah dirapikan, terstruktur dengan standar repositori produksi, memiliki hirarki yang jelas, serta dilengkapi *code block formatting* yang tepat.
 
-A backend API for building and managing widgets, collecting submissions, and providing dashboard statistics.
-
-This project is developed as a **FlyRank Capstone Project** using **FastAPI, SQLAlchemy, SQLite, Pydantic, and JWT authentication**.
-
-The application provides user authentication, widget management, tenant isolation, public widget access, submission management, and dashboard statistics.
+Anda dapat langsung menyalin (*copy-paste*) seluruh isi di bawah ini ke dalam file `README.md` repositori Anda.
 
 ---
 
-## 1. Project Overview
+```markdown
+# FlyRank Week 7 — Production-Oriented LLM API
 
-The FlyRank Widget Platform is a REST API that allows authenticated users to create and manage their own widgets.
+![Python](https://img.shields.io/badge/Python-3.10%2B-blue?style=flat-square&logo=python)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.100%2B-009688?style=flat-square&logo=fastapi)
+![Pydantic](https://img.shields.io/badge/Pydantic-v2-E92063?style=flat-square&logo=pydantic)
+![OpenRouter](https://img.shields.io/badge/OpenRouter-API-6366F1?style=flat-square)
 
-Each widget belongs to a specific user through `user_id`. This ensures **tenant isolation**, meaning users can only access and manage resources that belong to them.
+A production-oriented REST API that adds an LLM-powered customer support triage feature to an existing Widget Platform. 
 
-The platform also provides public endpoints so external users can view active widgets and submit data without requiring authentication.
-
----
-
-## 2. Main Features
-
-### Authentication
-
-- User registration
-- User login
-- Password hashing
-- JWT access token
-- Get currently authenticated user
-- Protected API endpoints
-
-### Widget Management
-
-Authenticated users can:
-
-- Create widgets
-- View their own widgets
-- View a specific widget
-- Update widgets
-- Delete widgets
-
-### Tenant Isolation
-
-Each widget is associated with a `user_id`.
-
-Users can only:
-
-- View their own widgets
-- Update their own widgets
-- Delete their own widgets
-- View submissions from their own widgets
-
-### Public Widget
-
-Public users can:
-
-- View active widgets
-- Submit data to widgets
-
-Public widget endpoints do not require authentication.
-
-### Submission
-
-The system stores submissions associated with widgets.
-
-Widget owners can retrieve submissions belonging to their own widgets.
-
-### Dashboard
-
-The platform provides dashboard statistics for authenticated users.
+The API accepts unstructured customer messages and returns validated, structured classifications to automate ticket handling while ensuring system reliability through deterministic safeguards.
 
 ---
 
-## 3. Technology Stack
+## 📌 Overview
 
-| Technology | Purpose                         |
-| ---------- | ------------------------------- |
-| Python     | Programming language            |
-| FastAPI    | Backend REST API framework      |
-| SQLAlchemy | ORM and database interaction    |
-| SQLite     | Database                        |
-| Pydantic   | Request and response validation |
-| JWT        | Authentication                  |
-| Uvicorn    | ASGI server                     |
-| Git        | Version control                 |
-| GitHub     | Repository hosting              |
-| Swagger UI | API testing and documentation   |
+Integrating LLMs into production APIs requires handling non-deterministic outputs. This project establishes a strict reliability boundary between probabilistic LLM outputs and deterministic backend workflows.
+
+### Key Capabilities
+- **Automated Triage:** Classifies messages into categories (`billing`, `bug`, `feature`, `other`) and urgency levels (`low`, `normal`, `high`).
+- **Structured JSON Output:** Enforces strict Pydantic schema validation for all LLM responses.
+- **Automated Repair Retry:** Automatically prompts the LLM to fix invalid JSON outputs (limited to 1 retry).
+- **Operational Kill Switch:** Instantly disable LLM processing via environment variables with zero code changes.
+- **Cost & Token Logging:** Tracks token usage and estimates request costs locally.
+- **Built-in Evaluation Suite:** Evaluates model accuracy against test cases.
 
 ---
 
-## 4. Project Structure
+## 🏗 System Flow & Architecture
+
+### High-Level API Workflow
 
 ```text
-flyrank-capstone-widgetplatform/
+Client Request
+      │
+      ▼
+FastAPI Router (POST /widgets/{id}/submissions)
+      │
+      ├──────► Check LLM_ENABLED?
+      │             │
+      │             ├── [FALSE] ──► Fallback Response (Static Default)
+      │             │
+      │             └── [TRUE]
+      │                   │
+      ▼                   ▼
+Versioned Prompt ──► OpenRouter / LLM Client (Timeout = 30s)
+                          │
+                          ▼
+                  Pydantic Validation
+                          │
+            ┌─────────────┴─────────────┐
+            ▼                           ▼
+       [ Valid ]                   [ Invalid ]
+            │                           │
+            │                           ▼
+            │                    1x Repair Retry
+            │                           │
+            │                     Validate Again
+            │                           │
+            ├◄──────────────────────────┘
+            │
+            ▼
+   Save Submission to DB ──► Return API Response
+
+```
+
+---
+
+## ✨ Feature Breakdown
+
+### 1. Versioned Prompts (`app/llm/prompts.py`)
+
+Prompts are isolated from application logic to allow tracking changes in model behavior over time.
+
+```python
+TRIAGE_PROMPT_VERSION = "v1"
+
+```
+
+### 2. Schema Validation (`app/llm/schema.py`)
+
+Outputs are strictly validated using Pydantic. If an LLM returns fields outside the schema or invalid ranges, validation fails.
+
+* **Category:** `billing`, `bug`, `feature`, `other`
+* **Urgency:** `low`, `normal`, `high`
+* **Confidence:** `0.0` to `1.0`
+* **Reason:** Short explanation string.
+
+### 3. Repair Retry Mechanism
+
+If the first output fails validation, the system sends a follow-up request asking the model to fix its response based on the validation error. Max retries are capped at `1` to prevent execution loops.
+
+### 4. Timeout & Explicit Retry Policy (`app/llm/client.py`)
+
+* **Timeout:** Set to `30.0s` to prevent hanging requests.
+* **Max Retries:** Client-level retries are set to `max_retries=0`. All retries are handled explicitly at the application level via the JSON repair flow.
+
+### 5. Operational Kill Switch
+
+Disable LLM processing seamlessly during provider outages or cost spikes by setting:
+
+```bash
+LLM_ENABLED=false
+
+```
+
+When disabled, the system defaults to:
+
+```json
+{
+  "category": "other",
+  "urgency": "normal",
+  "confidence": 0.5,
+  "reason": "Default classification."
+}
+
+```
+
+### 6. Cost Logging (`app/llm/cost.py`)
+
+Tracks token usage and estimated cost per request in a local log file (`llm_cost.log`):
+
+```text
+LLM COST LOG: 2026-08-18T20:00:00 | model=openrouter/free | prompt_tokens=500 | completion_tokens=80 | total_tokens=580 | estimated_cost_usd=0.00000000
+
+```
+
+---
+
+## 🛠 Tech Stack
+
+* **Language:** Python 3.10+
+* **Framework:** FastAPI, Uvicorn
+* **Database & ORM:** SQLite, SQLAlchemy
+* **Validation:** Pydantic v2
+* **Authentication:** JWT (JSON Web Tokens), Passlib
+* **LLM Integration:** OpenAI Python SDK (configured for OpenRouter)
+
+---
+
+## 📁 Project Structure
+
+```text
+flyrank-week7-llm-api/
 │
 ├── app/
-│   ├── models/
+│   ├── llm/
+│   │   ├── __init__.py
+│   │   ├── client.py        # LLM client configuration & timeouts
+│   │   ├── cost.py          # Token & cost calculation logger
+│   │   ├── prompts.py       # Versioned system prompts
+│   │   └── schema.py        # Pydantic validation schemas
+│   │
+│   ├── models/              # SQLAlchemy database models
 │   │   ├── user.py
 │   │   ├── widget.py
 │   │   └── submission.py
 │   │
-│   ├── schemas/
-│   │   ├── user.py
-│   │   ├── widget.py
-│   │   └── submission.py
-│   │
-│   ├── routers/
+│   ├── routers/             # API Route handlers
 │   │   ├── auth.py
-│   │   ├── widgets.py
-│   │   └── public.py
+│   │   ├── triage.py
+│   │   └── widgets.py
 │   │
-│   ├── database.py
-│   ├── dependencies.py
-│   ├── security.py
-│   └── main.py
+│   ├── schemas/             # Request/Response Pydantic schemas
+│   │   ├── submission.py
+│   │   └── widget.py
+│   │
+│   ├── database.py          # Database setup & sessions
+│   ├── dependencies.py      # Auth & DB dependencies
+│   ├── main.py              # FastAPI app entrypoint
+│   └── security.py          # Hashing & JWT logic
 │
-├── widget_platform.db
+├── eval/
+│   ├── triage_cases.json    # Test suite dataset
+│   └── run_eval.py          # Evaluation runner script
+│
+├── .env.example
+├── .gitignore
+├── JOB-CARD.md
 ├── requirements.txt
-├── README.md
-└── .gitignore
+└── README.md
+
 ```
 
 ---
 
-# 5. Installation
+## 🚀 Getting Started
 
-## Clone Repository
+### 1. Prerequisites & Installation
 
-```bash
-git clone https://github.com/Joyriasihombing/flyrank-capstone-widgetplatform.git
-cd flyrank-capstone-widgetplatform
-```
-
-## Create Virtual Environment
+Clone the repository and set up a virtual environment:
 
 ```bash
-python3 -m venv venv
-```
+# Clone repository
+git clone [https://github.com/Joyriasihombing/flyrank-week7-llm-api.git](https://github.com/Joyriasihombing/flyrank-week7-llm-api.git)
+cd flyrank-week7-llm-api
 
-## Activate Virtual Environment
+# Create & activate virtual environment
+python3 -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
-### macOS / Linux
-
-```bash
-source venv/bin/activate
-```
-
-### Windows
-
-```bash
-venv\Scripts\activate
-```
-
-## Install Dependencies
-
-```bash
+# Install dependencies
 pip install -r requirements.txt
+
 ```
 
----
+### 2. Environment Configuration
 
-# 6. Run the Application
+Copy `.env.example` to `.env` and fill in your OpenRouter credentials:
 
-Start the development server:
+```bash
+cp .env.example .env
+
+```
+
+Set up your `.env` parameters:
+
+```env
+LLM_BASE_URL=[https://openrouter.ai/api/v1](https://openrouter.ai/api/v1)
+LLM_API_KEY=your_openrouter_api_key_here
+LLM_MODEL=openrouter/free
+
+LLM_ENABLED=true
+
+LLM_INPUT_COST_PER_1M=0.0
+LLM_OUTPUT_COST_PER_1M=0.0
+
+```
+
+### 3. Run the Server
 
 ```bash
 uvicorn app.main:app --reload
+
 ```
 
-The API will run at:
+* **Interactive Docs (Swagger UI):** `http://127.0.0.1:8000/docs`
+* **OpenAPI Spec:** `http://127.0.0.1:8000/openapi.json`
 
-```text
-http://127.0.0.1:8000
+---
+
+## 🔌 API Reference & Usage
+
+### Step 1: Register & Login (Authentication)
+
+**Register:**
+
+```bash
+curl -X POST [http://127.0.0.1:8000/auth/register](http://127.0.0.1:8000/auth/register) \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "John Doe",
+    "email": "john@example.com",
+    "password": "securepassword123"
+  }'
+
+```
+
+**Login:**
+
+```bash
+curl -X POST [http://127.0.0.1:8000/auth/login](http://127.0.0.1:8000/auth/login) \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "username=john@example.com&password=securepassword123"
+
+```
+
+*Copy the returned `access_token` for authenticated requests.*
+
+---
+
+### Step 2: Create a Widget
+
+```bash
+curl -X POST [http://127.0.0.1:8000/widgets/](http://127.0.0.1:8000/widgets/) \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "Customer Support",
+    "description": "General help desk widget",
+    "widget_type": "contact",
+    "button_text": "Submit Ticket"
+  }'
+
 ```
 
 ---
 
-# 7. API Documentation
+### Step 3: Submit Customer Message (LLM Triage Endpoint)
 
-FastAPI automatically generates interactive API documentation.
+**Endpoint:** `POST /widgets/{widget_id}/submissions`
 
-### Swagger UI
+```bash
+curl -X POST [http://127.0.0.1:8000/widgets/1/submissions](http://127.0.0.1:8000/widgets/1/submissions) \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Jane Doe",
+    "email": "jane@example.com",
+    "message": "I was charged twice for my subscription this month."
+  }'
 
-```text
-http://127.0.0.1:8000/docs
 ```
 
-### OpenAPI JSON
-
-```text
-http://127.0.0.1:8000/openapi.json
-```
-
-Swagger UI can be used to test all available endpoints.
-
----
-
-# 8. Authentication API
-
-## Register
-
-```http
-POST /auth/register
-```
-
-Creates a new user.
-
-### Request
-
-```json
-{
-  "name": "Joy",
-  "email": "joy@example.com",
-  "password": "password123"
-}
-```
-
-### Response
+**Response Example:**
 
 ```json
 {
   "id": 1,
-  "name": "Joy",
-  "email": "joy@example.com"
+  "widget_id": 1,
+  "name": "Jane Doe",
+  "email": "jane@example.com",
+  "message": "I was charged twice for my subscription this month.",
+  "category": "billing",
+  "urgency": "normal",
+  "confidence": 0.95,
+  "reason": "The customer reports being charged twice for their subscription."
 }
+
 ```
 
 ---
 
-## Login
+## 📊 Evaluation
 
-```http
-POST /auth/login
-```
+A test suite containing 10 test cases is provided in `eval/triage_cases.json`.
 
-Authenticates a user and returns a JWT access token.
-
-### Request
-
-```json
-{
-  "email": "joy@example.com",
-  "password": "password123"
-}
-```
-
-### Response
-
-```json
-{
-  "access_token": "JWT_TOKEN",
-  "token_type": "bearer"
-}
-```
-
-The returned access token is used to access protected endpoints.
-
----
-
-## Get Current User
-
-```http
-GET /auth/me
-```
-
-Returns information about the currently authenticated user.
-
-### Authorization
-
-```text
-Authorization: Bearer <access_token>
-```
-
-### Response
-
-```json
-{
-  "id": 1,
-  "name": "Joy",
-  "email": "joy@example.com"
-}
-```
-
----
-
-# 9. Widget Management API
-
-All widget management endpoints require authentication.
-
-## Create Widget
-
-```http
-POST /widgets/
-```
-
-Creates a widget for the currently authenticated user.
-
-### Request
-
-```json
-{
-  "title": "Customer Feedback",
-  "description": "Collect customer feedback",
-  "widget_type": "form",
-  "button_text": "Submit"
-}
-```
-
-The API automatically assigns:
-
-```text
-user_id = current_user.id
-```
-
----
-
-## Get All My Widgets
-
-```http
-GET /widgets/
-```
-
-Returns only widgets owned by the authenticated user.
-
-This implements tenant isolation.
-
-Example query:
-
-```python
-widgets = db.query(Widget).filter(
-    Widget.user_id == current_user.id
-).all()
-```
-
----
-
-## Get Widget by ID
-
-```http
-GET /widgets/{widget_id}
-```
-
-Returns a specific widget belonging to the authenticated user.
-
-The API checks both:
-
-```text
-widget.id
-```
-
-and:
-
-```text
-widget.user_id == current_user.id
-```
-
-If the widget does not belong to the user:
-
-```http
-404 Not Found
-```
-
----
-
-## Update Widget
-
-```http
-PUT /widgets/{widget_id}
-```
-
-Updates a widget owned by the authenticated user.
-
-The API verifies ownership before updating the resource.
-
----
-
-## Delete Widget
-
-```http
-DELETE /widgets/{widget_id}
-```
-
-Deletes a widget owned by the authenticated user.
-
-The API verifies ownership before deleting the resource.
-
----
-
-# 10. Public Widget API
-
-Public endpoints allow external users to interact with active widgets without authentication.
-
-## Get Public Widget
-
-```http
-GET /public/widgets/{widget_id}
-```
-
-Returns an active public widget.
-
----
-
-## Submit to Widget
-
-```http
-POST /public/widgets/{widget_id}/submit
-```
-
-Creates a submission for a public widget.
-
-Example:
-
-```json
-{
-  "data": {
-    "name": "John",
-    "feedback": "Great experience!"
-  }
-}
-```
-
-A successful submission is stored in the database and associated with the corresponding widget.
-
----
-
-# 11. Submission API
-
-## Get Widget Submissions
-
-```http
-GET /widgets/{widget_id}/submissions
-```
-
-Returns submissions belonging to a widget.
-
-The API first verifies that the widget belongs to the authenticated user.
-
-Example ownership check:
-
-```python
-widget = db.query(Widget).filter(
-    Widget.id == widget_id,
-    Widget.user_id == current_user.id
-).first()
-```
-
-If the widget does not belong to the user:
-
-```http
-404 Not Found
-```
-
-This prevents users from accessing submissions belonging to another user's widget.
-
----
-
-# 12. Dashboard API
-
-## Dashboard Statistics
-
-```http
-GET /widgets/dashboard/stats
-```
-
-Returns dashboard statistics for the authenticated user's widgets and submissions.
-
-The endpoint requires authentication.
-
-The statistics are calculated based on resources belonging to the current user.
-
----
-
-# 13. Tenant Isolation
-
-Tenant isolation is one of the important security requirements of this project.
-
-Every widget contains a `user_id` that identifies its owner.
-
-The authenticated user's ID is obtained from the JWT token.
-
-Example:
-
-```python
-current_user: User = Depends(get_current_user)
-```
-
-When querying widgets, the API filters by the authenticated user's ID:
-
-```python
-db.query(Widget).filter(
-    Widget.user_id == current_user.id
-).all()
-```
-
-For individual resources:
-
-```python
-db.query(Widget).filter(
-    Widget.id == widget_id,
-    Widget.user_id == current_user.id
-).first()
-```
-
-Therefore, a user cannot access, modify, or delete another user's widgets.
-
----
-
-# 14. JWT Authentication Flow
-
-The authentication process works as follows:
-
-```text
-User
- │
- ├── Register
- │
- ▼
-User Account
- │
- ├── Login
- │
- ▼
-JWT Access Token
- │
- ▼
-Authorization: Bearer <token>
- │
- ▼
-Protected Endpoint
- │
- ▼
-get_current_user()
- │
- ▼
-Authenticated User
-```
-
-The JWT token contains information used to identify the authenticated user.
-
-Protected endpoints use the authentication dependency:
-
-```python
-current_user: User = Depends(get_current_user)
-```
-
----
-
-# 15. Response Models
-
-The project uses Pydantic response models to provide consistent and validated API responses.
-
-Example:
-
-```python
-from pydantic import BaseModel
-
-
-class WidgetResponse(BaseModel):
-    id: int
-    title: str
-    description: str
-    widget_type: str
-    button_text: str
-    is_active: bool
-
-    class Config:
-        from_attributes = True
-```
-
-The response model is used by endpoints such as:
-
-```python
-@router.get("/", response_model=list[WidgetResponse])
-```
-
-Using response models ensures that API responses follow a defined structure.
-
----
-
-# 16. Error Handling
-
-The API uses HTTP status codes and FastAPI `HTTPException` for error handling.
-
-Common status codes include:
-
-| Status Code | Description        |
-| ----------- | ------------------ |
-| 200         | Request successful |
-| 201         | Resource created   |
-| 400         | Bad request        |
-| 401         | Unauthorized       |
-| 404         | Resource not found |
-| 422         | Validation error   |
-
-### Example: Duplicate Email
-
-```python
-raise HTTPException(
-    status_code=400,
-    detail="Email already registered"
-)
-```
-
-### Example: Invalid Login
-
-```python
-raise HTTPException(
-    status_code=401,
-    detail="Invalid email or password"
-)
-```
-
-### Example: Widget Not Found
-
-```python
-raise HTTPException(
-    status_code=404,
-    detail="Widget not found"
-)
-```
-
----
-
-# 17. Database
-
-The application uses SQLite with SQLAlchemy.
-
-Main entities:
-
-```text
-User
- │
- └── Widget
-       │
-       └── Submission
-```
-
-### User
-
-Stores user account information.
-
-### Widget
-
-Stores widget information and its owner through `user_id`.
-
-### Submission
-
-Stores data submitted through a widget and references the corresponding `widget_id`.
-
----
-
-# 18. API Testing
-
-The API can be tested using Swagger UI or Postman.
-
-Recommended testing sequence:
-
-### Step 1 — Register
-
-```http
-POST /auth/register
-```
-
-### Step 2 — Login
-
-```http
-POST /auth/login
-```
-
-Copy the returned:
-
-```text
-access_token
-```
-
-### Step 3 — Authorize
-
-In Swagger UI, click:
-
-```text
-Authorize
-```
-
-Enter:
-
-```text
-Bearer <access_token>
-```
-
-### Step 4 — Test Current User
-
-```http
-GET /auth/me
-```
-
-### Step 5 — Create Widget
-
-```http
-POST /widgets/
-```
-
-### Step 6 — Get Widgets
-
-```http
-GET /widgets/
-```
-
-### Step 7 — Get Widget
-
-```http
-GET /widgets/{widget_id}
-```
-
-### Step 8 — Update Widget
-
-```http
-PUT /widgets/{widget_id}
-```
-
-### Step 9 — Submit Public Data
-
-```http
-POST /public/widgets/{widget_id}/submit
-```
-
-### Step 10 — Get Submissions
-
-```http
-GET /widgets/{widget_id}/submissions
-```
-
-### Step 11 — Check Dashboard
-
-```http
-GET /widgets/dashboard/stats
-```
-
-### Step 12 — Delete Widget
-
-```http
-DELETE /widgets/{widget_id}
-```
-
----
-
-# 19. Security Considerations
-
-The project includes several basic security mechanisms:
-
-- Passwords are hashed before being stored.
-- JWT is used for authentication.
-- Protected endpoints require authentication.
-- Widget ownership is verified using `user_id`.
-- Users cannot access another user's widgets.
-- Submission access is restricted to the widget owner.
-- Public endpoints are separated from authenticated endpoints.
-
----
-
-# 20. Environment and Dependencies
-
-Dependencies are stored in:
-
-```text
-requirements.txt
-```
-
-Install them using:
+Run the evaluation script:
 
 ```bash
-pip install -r requirements.txt
+PYTHONPATH=. python eval/run_eval.py
+
 ```
 
-The virtual environment should not be committed to Git.
-
-The `.gitignore` file should include:
+**Sample Output:**
 
 ```text
-venv/
-__pycache__/
-*.pyc
-.env
+Running evaluation on 10 cases...
+
+1. category=PASS | urgency=PASS
+2. category=PASS | urgency=PASS
+3. category=PASS | urgency=PASS
+4. category=PASS | urgency=PASS
+5. category=PASS | urgency=PASS
+6. category=PASS | urgency=PASS
+7. category=PASS | urgency=PASS
+8. category=PASS | urgency=PASS
+9. category=PASS | urgency=FAIL
+10. category=PASS | urgency=PASS
+
+==============================
+EVALUATION RESULT
+==============================
+Category accuracy: 9/10 (90%)
+Urgency accuracy:  8/10 (80%)
+
 ```
 
 ---
 
-# 21. Git Workflow
+## 📜 Commit History
 
-The project uses Git for version control.
-
-Check the current status:
-
-```bash
-git status
-```
-
-Add changes:
-
-```bash
-git add .
-```
-
-Create a commit:
-
-```bash
-git commit -m "Complete FlyRank widget platform"
-```
-
-Push to GitHub:
-
-```bash
-git push origin main
-```
-
-Repository:
-
-https://github.com/Joyriasihombing/flyrank-capstone-widgetplatform
-
----
-
-# 22. Project Validation Checklist
-
-Before submitting the capstone, verify the following:
-
-- [x] FastAPI application runs successfully
-- [x] User registration works
-- [x] User login works
-- [x] JWT authentication works
-- [x] `/auth/me` works
-- [x] Widget CRUD works
-- [x] Tenant isolation is implemented
-- [x] Public widget endpoint works
-- [x] Public submission endpoint works
-- [x] Widget submission retrieval works
-- [x] Dashboard statistics endpoint works
-- [x] Response models are implemented
-- [x] Error handling is implemented
-- [x] SQLAlchemy models are used
-- [x] SQLite database is configured
-- [x] Swagger documentation is available
-- [x] Project structure is organized
-- [x] `requirements.txt` is included
-- [x] `.gitignore` is configured
-- [x] README documentation is included
-
----
-
-# 23. How to Run
-
-The complete application can be started with:
-
-```bash
-source venv/bin/activate
-uvicorn app.main:app --reload
-```
-
-Then open:
+This repository was developed incrementally:
 
 ```text
-http://127.0.0.1:8000/docs
+72699d1 feat: add LLM timeout and retry policy
+0c1ac3a feat: add versioned triage prompt
+4a77c92 feat: add versioned triage prompt and llm kill switch
+c157d0b chore: ignore local database
+1ef9f08 feat: add LLM triage endpoint
+6ca7ba1 readme
+318c91e Implement authentication, widget management, and submission API
+9070dd7 Implementation JWT Authentication
+ab69854 setup database and SQLAlchemy models
+2d60d0e add API design and system flow
+
 ```
 
----
+```
 
-# Author
-
-**Joy Ria Sihombing**
-
-FlyRank Capstone Project
-
-GitHub Repository:
-
-https://github.com/Joyriasihombing/flyrank-capstone-widgetplatform
+```

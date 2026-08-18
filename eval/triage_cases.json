@@ -1,0 +1,52 @@
+[
+    {
+      "text": "I was charged twice for the same payment",
+      "category": "billing",
+      "urgency": "high"
+    },
+    {
+      "text": "My payment has not been reflected in my balance",
+      "category": "billing",
+      "urgency": "normal"
+    },
+    {
+      "text": "I cannot log into my account",
+      "category": "bug",
+      "urgency": "high"
+    },
+    {
+      "text": "The dashboard crashes when I open it",
+      "category": "bug",
+      "urgency": "high"
+    },
+    {
+      "text": "The button on the homepage does nothing",
+      "category": "bug",
+      "urgency": "normal"
+    },
+    {
+      "text": "Please add dark mode to the application",
+      "category": "feature",
+      "urgency": "low"
+    },
+    {
+      "text": "Can you add Google login?",
+      "category": "feature",
+      "urgency": "normal"
+    },
+    {
+      "text": "I would like to request a CSV export feature",
+      "category": "feature",
+      "urgency": "low"
+    },
+    {
+      "text": "I have a question about how the dashboard works",
+      "category": "other",
+      "urgency": "normal"
+    },
+    {
+      "text": "Can you explain how to change my account settings?",
+      "category": "other",
+      "urgency": "low"
+    }
+  ]

@@ -13,8 +13,10 @@ from app.schemas.widget import WidgetCreate
 from app.schemas.submission import SubmissionCreate, SubmissionResponse
 
 from app.llm.client import get_llm_client
+from app.llm.prompts import TRIAGE_PROMPT
+from app.llm.schema import TriageResponse
+from app.llm.cost import log_llm_usage
 
-import json
 import os
 
 
@@ -63,7 +65,6 @@ def get_widgets(
 
 # =========================================================
 # DASHBOARD STATS
-# IMPORTANT: put this BEFORE /{widget_id}
 # =========================================================
 
 @router.get("/dashboard/stats")
@@ -241,76 +242,209 @@ def create_submission(
     # 3. AI TRIAGE
     # -----------------------------------------------------
 
-    try:
-        client = get_llm_client()
+    llm_enabled = (
+        os.getenv("LLM_ENABLED", "true").lower() == "true"
+    )
 
-        prompt = f"""
-Classify this customer support message.
+    if llm_enabled:
+        try:
+            client = get_llm_client()
 
-Choose exactly one category:
-- billing
-- bug
-- feature
-- other
+            prompt = TRIAGE_PROMPT.format(
+                text=submission.message
+            )
 
-Choose exactly one urgency:
-- low
-- normal
-- high
+            # =================================================
+            # FIRST LLM REQUEST
+            # =================================================
 
-Return ONLY valid JSON.
+            response = client.chat.completions.create(
+                model=os.environ["LLM_MODEL"],
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a customer support "
+                            "triage classifier. "
+                            "Return only valid JSON."
+                        )
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                temperature=0
+            )
 
-Format:
+            # =================================================
+            # LOG FIRST LLM USAGE
+            # =================================================
+
+            usage = response.usage
+
+            if usage:
+                log_llm_usage(
+                    model=os.environ["LLM_MODEL"],
+                    prompt_tokens=usage.prompt_tokens,
+                    completion_tokens=usage.completion_tokens,
+                    total_tokens=usage.total_tokens
+                )
+
+            # =================================================
+            # GET CONTENT
+            # =================================================
+
+            content = response.choices[0].message.content
+
+            if not content:
+                raise ValueError(
+                    "LLM returned empty response"
+                )
+
+            content = content.strip()
+
+            # Remove markdown code fences
+            if content.startswith("```"):
+                content = (
+                    content
+                    .replace("```json", "")
+                    .replace("```", "")
+                    .strip()
+                )
+
+            # =================================================
+            # VALIDATE FIRST RESPONSE
+            # =================================================
+
+            try:
+                result = TriageResponse.model_validate_json(
+                    content
+                )
+
+            except Exception as validation_error:
+
+                print(
+                    "LLM validation failed. "
+                    f"Starting repair retry: {validation_error}"
+                )
+
+                # =================================================
+                # REPAIR REQUEST
+                # =================================================
+
+                repair_prompt = f"""
+Convert the following model output into valid JSON.
+
+The JSON MUST follow this exact structure:
 
 {{
-  "category": "billing",
-  "urgency": "normal",
+  "category": "billing|bug|feature|other",
+  "urgency": "low|normal|high",
   "confidence": 0.0,
   "reason": "short explanation"
 }}
 
-Customer message:
-{submission.message}
+Rules:
+- category must be exactly one of billing, bug, feature, other
+- urgency must be exactly one of low, normal, high
+- confidence must be a number between 0 and 1
+- reason must be a short string
+- return ONLY JSON
+- do not use markdown
+- do not add extra fields
+
+Invalid model output:
+
+{content}
 """
 
-        response = client.chat.completions.create(
-            model=os.environ["LLM_MODEL"],
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a customer support triage classifier. "
-                        "Return only valid JSON."
+                repair_response = client.chat.completions.create(
+                    model=os.environ["LLM_MODEL"],
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "You are a JSON repair assistant. "
+                                "Return ONLY valid JSON."
+                            )
+                        },
+                        {
+                            "role": "user",
+                            "content": repair_prompt
+                        }
+                    ],
+                    temperature=0
+                )
+
+                # =================================================
+                # LOG REPAIR USAGE
+                # =================================================
+
+                repair_usage = repair_response.usage
+
+                if repair_usage:
+                    log_llm_usage(
+                        model=os.environ["LLM_MODEL"],
+                        prompt_tokens=repair_usage.prompt_tokens,
+                        completion_tokens=repair_usage.completion_tokens,
+                        total_tokens=repair_usage.total_tokens
                     )
-                },
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ],
-            temperature=0
-        )
 
-        content = response.choices[0].message.content
+                # =================================================
+                # GET REPAIRED CONTENT
+                # =================================================
 
-        # Remove possible markdown code fences
-        if content.startswith("```"):
-            content = content.replace("```json", "")
-            content = content.replace("```", "")
-            content = content.strip()
+                repaired_content = (
+                    repair_response.choices[0].message.content
+                )
 
-        result = json.loads(content)
+                if not repaired_content:
+                    raise ValueError(
+                        "Repair attempt returned empty response"
+                    )
 
-        category = result.get("category", "other")
-        urgency = result.get("urgency", "normal")
-        confidence = float(result.get("confidence", 0.5))
-        reason = result.get(
-            "reason",
-            "No reason provided."
-        )
+                repaired_content = repaired_content.strip()
 
-    except Exception as e:
-        print(f"LLM TRIAGE ERROR: {e}")
+                if repaired_content.startswith("```"):
+                    repaired_content = (
+                        repaired_content
+                        .replace("```json", "")
+                        .replace("```", "")
+                        .strip()
+                    )
+
+                # =================================================
+                # VALIDATE REPAIRED RESPONSE
+                # =================================================
+
+                result = TriageResponse.model_validate_json(
+                    repaired_content
+                )
+
+                print("LLM repair successful.")
+
+            # =================================================
+            # USE VALIDATED RESULT
+            # =================================================
+
+            category = result.category.value
+            urgency = result.urgency.value
+            confidence = result.confidence
+            reason = result.reason
+
+            print(
+                "LLM TRIAGE SUCCESS: "
+                f"category={category}, "
+                f"urgency={urgency}, "
+                f"confidence={confidence}, "
+                f"reason={reason}"
+            )
+
+        except Exception as e:
+            print(
+                f"LLM TRIAGE ERROR: {e}"
+            )
 
     # -----------------------------------------------------
     # 4. Save submission

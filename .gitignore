@@ -4,3 +4,5 @@ __pycache__/
 *.pyc
 logs/
 widget_platform.db
+llm_cost.log
+.env
