@@ -1,8 +1,4 @@
-Berikut adalah versi **`README.md`** yang sudah dirapikan, terstruktur dengan standar repositori produksi, memiliki hirarki yang jelas, serta dilengkapi *code block formatting* yang tepat.
 
-Anda dapat langsung menyalin (*copy-paste*) seluruh isi di bawah ini ke dalam file `README.md` repositori Anda.
-
----
 
 ```markdown
 # FlyRank Week 7 — Production-Oriented LLM API
