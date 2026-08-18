@@ -1,38 +1,39 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+import os
 
 from jose import jwt
-from passlib.context import CryptContext
-from jose import JWTError, jwt
+from argon2 import PasswordHasher
+from argon2.exceptions import VerifyMismatchError
 
-SECRET_KEY = "CHANGE_THIS_SECRET"
+pwd_hasher = PasswordHasher()
+
+SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-key")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60
-
-pwd_context = CryptContext(
-    schemes=["bcrypt"],
-    deprecated="auto"
-)
 
 
-def hash_password(password: str):
-    return pwd_context.hash(password)
+def hash_password(password: str) -> str:
+    return pwd_hasher.hash(password)
 
 
-def verify_password(password: str, hashed_password: str):
-    return pwd_context.verify(password, hashed_password)
+def verify_password(password: str, hashed_password: str) -> bool:
+    try:
+        return pwd_hasher.verify(hashed_password, password)
+    except VerifyMismatchError:
+        return False
 
 
-def create_access_token(data: dict):
-    payload = data.copy()
-    payload["exp"] = datetime.utcnow() + timedelta(
-        minutes=ACCESS_TOKEN_EXPIRE_MINUTES
-    )
+def create_access_token(data: dict, expires_minutes: int = 60):
+    to_encode = data.copy()
+
+    expire = datetime.now(timezone.utc) + timedelta(minutes=expires_minutes)
+    to_encode.update({"exp": expire})
 
     return jwt.encode(
-        payload,
+        to_encode,
         SECRET_KEY,
         algorithm=ALGORITHM
     )
+
 
 def verify_token(token: str):
     try:
@@ -42,5 +43,5 @@ def verify_token(token: str):
             algorithms=[ALGORITHM]
         )
         return payload
-    except JWTError:
+    except Exception:
         return None

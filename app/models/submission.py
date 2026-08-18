@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, ForeignKey
+from sqlalchemy import Column, Integer, String, Float, ForeignKey
 from sqlalchemy.orm import relationship
 from app.database import Base
 
@@ -13,5 +13,11 @@ class Submission(Base):
     name = Column(String)
     email = Column(String)
     message = Column(String)
+
+    # AI Triage Result
+    category = Column(String, default="other")
+    urgency = Column(String, default="normal")
+    confidence = Column(Float, default=0.0)
+    reason = Column(String, nullable=True)
 
     widget = relationship("Widget")

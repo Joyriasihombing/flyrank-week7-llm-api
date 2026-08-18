@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, ConfigDict
 
 
 class SubmissionCreate(BaseModel):
@@ -14,5 +14,9 @@ class SubmissionResponse(BaseModel):
     email: EmailStr
     message: str
 
-    class Config:
-        from_attributes = True
+    category: str
+    urgency: str
+    confidence: float
+    reason: str | None = None
+
+    model_config = ConfigDict(from_attributes=True)
